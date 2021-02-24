@@ -44,6 +44,7 @@ class BaseDBPipeline(object):
 class DatabasePipeline(BaseDBPipeline):
     """将爬虫结果储存到数据库中的管道, 基于ORM模型, 可适应不同种类的数据库"""
 
+    producer = KafkaProducer(bootstrap_servers=['10.249.110.57:9092', ])
     def process_item(self, item, spider: "scrapy.Spider"):
         # 因为Announcement类中存在一个id字段作为pk, 因此, 从爬取的数据中删掉id
         if "id" in item:
@@ -60,29 +61,30 @@ class DatabasePipeline(BaseDBPipeline):
         # if not - we insert new item to DB
         else:
             new_item = Announcement(**item)
-            self.kafka_send("topic", b'message', spider)
-            self.session.add(new_item)
-            spider.logger.debug('New item {} added to DB.'.format(item['announcementTitle']))
+            success = self.kafka_send("externalAlert", item["announcementTitle"].encode(), spider)
+            if success:
+                self.session.add(new_item)
+                spider.logger.debug('New item {} added to DB.'.format(item['announcementTitle']))
         return item
 
     def kafka_send(self, topic, message, spider: "scrapy.Spider"):
 
-        producer = KafkaProducer(bootstrap_servers=['broker1:1234'])
 
         # Asynchronous by default
-        future = producer.send('my-topic', b'raw_bytes')
+        future = self.producer.send(topic, message)
 
         # Block for 'synchronous' sends
         try:
-            record_metadata = future.get(timeout=10)
+            record_metadata = future.get(timeout=1)
             # Successful result returns assigned partition and offset
-            spider.logger.debug(record_metadata.topic)
-            spider.logger.debug(record_metadata.partition)
-            spider.logger.debug(record_metadata.offset)
-        except KafkaError:
+            #spider.logger.debug(record_metadata.topic)
+            #spider.logger.debug(record_metadata.partition)
+            #spider.logger.debug(record_metadata.offset)
+        except Exception as ex:
             # Decide what to do if produce request failed...
-            spider.logger.exception()
-            return
+            spider.logger.exception(ex)
+            return False
+        return True
 
 
 class KafkaPipeline:
